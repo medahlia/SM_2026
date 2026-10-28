@@ -3,8 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import chi2
 
 
-# ЗАГАЛЬНІ ФУНКЦІЇ
-#Обчислює середнє значення та дисперсію.
+#Обчислює середнє значення та дисперсію
 def calculate_statistics(x):
     mean = np.mean(x)
     variance = np.var(x, ddof=1)   # незміщена оцінка
@@ -183,8 +182,6 @@ def run_congruential_task(n=10_000):
     print("СПОСІБ 2. РЕКУРЕНТНИЙ ГЕНЕРАТОР")
     print("=" * 60)
 
-    # Основні параметри з методички:
-    # a = 5^13, c = 2^31
     parameter_sets = [
         (5**13, 2**31),
         (5**15, 2**31),

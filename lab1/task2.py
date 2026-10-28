@@ -19,13 +19,14 @@ class Item:
         self.v = v
 
 
-def measure_sorting_times(n=1_000_000, repetitions=150, seed=2026):
+def measure_sorting_times(n=1_000_000, repetitions=150, seed=2026, warmup=40):
     rng = np.random.default_rng(seed)
 
     def build():
         return [Item(v) for v in rng.integers(0, 10**9, n).tolist()]
 
-    warm = build(); warm.sort(key=lambda o: o.v); del warm    # прогрів
+    for _ in range(warmup):                # прогрів (пам'ять, кеші, частота CPU) — не рахується
+        w = build(); w.sort(key=lambda o: o.v); del w
     times = []
     for i in range(repetitions):
         data = build()
@@ -140,6 +141,16 @@ def identify_distribution(x, label=""):
     return best, nearest
 
 
+def find_burn_in(x):
+    """Перехідний режим (прогрів): час спочатку зростає до сталого рівня.
+    Стаціонарний рівень m і робастний розкид s оцінюються за другою половиною даних;
+    відкидаються всі запуски до останнього, що лежить нижче m - 3s (у перших 40 %)."""
+    n = len(x); h = x[n // 2:]
+    m = np.median(h); s = 1.4826 * np.median(np.abs(h - m))
+    low = np.where(x[:int(0.4 * n)] < m - 3 * s)[0]
+    return int(low[-1] + 1) if len(low) else 0
+
+
 def diagnostics(x):
     """Чи не дрейфують виміри в часі і чи є викиди (межа Тьюкі Q3 + 3·IQR)."""
     rho, p = stats.spearmanr(np.arange(len(x)), x)
@@ -160,6 +171,13 @@ def generate_core(model, count, seed=123):
     rng = np.random.default_rng(seed)
     zeta = np.clip(rng.random(count), 1e-12, 1 - 1e-12)         # ζ ~ U(0;1)
     return model["dist"].ppf(zeta, *model["params"])            # r = F^{-1}(ζ)
+
+
+def generate_table(sample, count, seed=123):
+    """Табличний метод (1.2.4): F(x) задається кусково-лінійно парами (x_i, a_i = i/(n-1)),
+    r = x_{i-1} + (x_i - x_{i-1})/(a_i - a_{i-1}) · (ζ - a_{i-1})."""
+    xs = np.sort(sample); a = np.arange(len(xs)) / (len(xs) - 1)
+    return np.interp(np.random.default_rng(seed).random(count), a, xs)
 
 
 def generate_delays(model, count=10_000, outliers=None, p_out=0.0, seed=123):
@@ -186,8 +204,9 @@ def evaluate_accuracy(real, sim, model, sim_core, repeats=500, seed=5, gen=None)
     for nm, a, b in zip(names, r, s):
         print(f"{nm:<10}{a:>11.5f}{b:>11.5f}{100 * (b - a) / a:>18.2f}")
 
-    st, cr, df, p = chi2_test(sim_core, model["dist"], model["params"], 0)
-    print(f"\nχ² (основна частина імітації) vs обраний закон: {st:.3f} (критичне {cr:.3f}, df={df})")
+    if sim_core is not None:
+        st, cr, df, p = chi2_test(sim_core, model["dist"], model["params"], 0)
+        print(f"\nχ² (основна частина імітації) vs обраний закон: {st:.3f} (критичне {cr:.3f}, df={df})")
     ks = stats.ks_2samp(real, sim)
     print(f"KS (реальні vs імітація): D = {ks.statistic:.4f}, p = {ks.pvalue:.4f}")
     rng = np.random.default_rng(seed)
@@ -197,11 +216,18 @@ def evaluate_accuracy(real, sim, model, sim_core, repeats=500, seed=5, gen=None)
 
     mean_err = abs(s[0] - r[0]) / r[0] * 100
     std_err = abs(s[1] - r[1]) / r[1] * 100
-    good = mean_err < 1 and std_err < 5 and ks.pvalue > ALPHA
+    p50_err = abs(s[7] - r[7]) / r[7] * 100
+    p95_err = abs(s[9] - r[9]) / r[9] * 100
+    heavy = stats.kurtosis(real) > 10
+    # при важкому хвості σ визначається 1-3 викидами, тому критерій — середнє, P50, P95 і KS
+    good = mean_err < 1 and p50_err < 1 and p95_err < 2 and ks.pvalue > ALPHA and (heavy or std_err < 5)
     print("\nВИСНОВОК")
     print("-" * 45)
-    print(f"Закон: {model['name']}; похибка середнього {mean_err:.2f} %, σ {std_err:.2f} %, "
-          f"KS p = {ks.pvalue:.3f}.")
+    print(f"Закон: {model['name']}; похибки: середнє {mean_err:.2f} %, P50 {p50_err:.2f} %, P95 {p95_err:.2f} %, "
+          f"σ {std_err:.2f} %, KS p = {ks.pvalue:.3f}.")
+    if heavy:
+        print("Хвіст важкий (ексцес > 10): σ залежить від кількох викидів і є нестійкою оцінкою, "
+              "тому точність оцінюється за середнім, медіаною, P95 та KS.")
     print("Імітація відтворює затримку задовільно." if good else
           "Точність недостатня: потрібно уточнити модель (див. таблицю похибок).")
 
@@ -225,9 +251,18 @@ def main():
         np.savetxt("sort_times.csv", real, header="time_s", comments="")
     if len(real) < 100:
         print("УВАГА: n < 100 — χ² незастосовний, використовується λ-критерій; для надійності зробіть ≥ 100 вимірювань.")
-    print_statistics(real, "РЕЗУЛЬТАТИ ВИМІРЮВАНЬ")
-    plot_histogram(real, "Гістограма часу сортування 10^6 об'єктів")
-    thr = diagnostics(real)
+    print_statistics(real, "РЕЗУЛЬТАТИ ВИМІРЮВАНЬ (усі запуски)")
+    diagnostics(real)
+    burn = find_burn_in(real)
+    if burn:
+        print(f"\nПерехідний режим: перші {burn} запусків відкинуто (час зростає до сталого рівня — "
+              f"прогрів системи); далі аналізується стаціонарна частина.")
+        real = real[burn:]
+        print_statistics(real, "СТАЦІОНАРНА ЧАСТИНА")
+    cv = real.std(ddof=1) / real.mean()
+    print(f"\nКоефіцієнт варіації CV = {100 * cv:.2f} %")
+    plot_histogram(real, "Гістограма часу сортування 10^6 об'єктів (стаціонарна частина)")
+    thr = diagnostics(real) if burn else np.percentile(real, 75) + 3 * (np.percentile(real, 75) - np.percentile(real, 25))
 
     best, nearest = identify_distribution(real, " (усі дані)")
     outliers, p_out = None, 0.0
@@ -237,20 +272,23 @@ def main():
         print(f"\nВикиди (> {thr:.5f} с, {len(outliers)} шт.) відокремлюємо: це рідкісні затримки "
               f"від ОС/GC, їх моделюємо окремо за емпіричним розподілом.")
         best, nearest = identify_distribution(core, " (без викидів)")
-        if best is None and nearest is not None:
-            best = nearest
-            print(f"УВАГА: жоден закон не пройшов критерій; береться найближчий — {best['name']}. "
-                  f"Імітація буде наближеною; перевірте дрейф у діагностиці (повторіть замір при "
-                  f"вимкнених фонових програмах, живлення від мережі).")
         if best is None:
-            print("Підібрати закон не вдалося."); return
+            print(f"\nПараметричний закон не пройшов критерій (найближчий: {nearest['name']}, "
+                  f"χ²={nearest['stat']:.1f} проти {nearest['crit']:.1f}). Розподіл має «тонку» структуру, "
+                  f"яку 2–3 параметри не описують, тому генератор будуємо ТАБЛИЧНИМ методом "
+                  f"за емпіричною функцією розподілу стаціонарної частини.")
+            best = dict(name="Табличний (емпіричний) метод", table=True)
     else:
         core = real
 
-    gen = lambda cnt, seed=123: generate_delays(best, cnt, outliers, p_out, seed)
-    sim = gen(10_000)
+    if best.get("table"):
+        gen = lambda cnt, seed=123: generate_table(real, cnt, seed)
+        sim = gen(10_000); sim_core = None
+    else:
+        gen = lambda cnt, seed=123: generate_delays(best, cnt, outliers, p_out, seed)
+        sim = gen(10_000); sim_core = generate_core(best, 10_000)
     print_statistics(sim, "ЗГЕНЕРОВАНІ ЗАТРИМКИ")
-    evaluate_accuracy(real, sim, best, generate_core(best, 10_000), gen=gen)
+    evaluate_accuracy(real, sim, best, sim_core, gen=gen)
 
 
 if __name__ == "__main__":

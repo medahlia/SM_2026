@@ -1,4 +1,3 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import chi2
@@ -11,11 +10,11 @@ from scipy.stats import chi2
 def calculate_statistics(x):
     """Обчислює середнє значення та дисперсію."""
     mean = np.mean(x)
-    variance = np.var(x)
+    variance = np.var(x, ddof=1)   # незміщена оцінка
     return mean, variance
 
 
-def plot_histogram(x, title, bins=30):
+def plot_histogram(x, title, bins=20):
     """Будує гістограму частот."""
     plt.figure(figsize=(8, 5))
     plt.hist(x, bins=bins, edgecolor="black")
@@ -87,12 +86,12 @@ def generate_exponential(n, lam):
     x_i = -(1 / lambda) * ln(xi_i),
     де xi_i рівномірно розподілені на (0; 1).
     """
-    xi = np.random.uniform(0, 1, n)
+    xi = 1.0 - np.random.random(n)      # (0; 1], щоб уникнути ln(0)
     x = -(1 / lam) * np.log(xi)
     return x
 
 
-def test_exponential_distribution(x, lam, bins=10, alpha=0.05):
+def test_exponential_distribution(x, lam, bins=10, alpha=0.05, n_estimated=0):
     """
     Перевіряє гіпотезу про експоненціальний розподіл
     з відомим параметром lambda.
@@ -116,7 +115,7 @@ def test_exponential_distribution(x, lam, bins=10, alpha=0.05):
     expected = np.full(bins, n / bins)
 
     print("\nФактичні та очікувані частоти:")
-    print(f"{'Інтервал':>10} {'Фактична':>12} {'Очікувана':>12}")
+    print(f"{'Інтервал':>20} {'Фактична':>12} {'Очікувана':>12}")
 
     for i in range(bins):
         if i == bins - 1:
@@ -125,14 +124,14 @@ def test_exponential_distribution(x, lam, bins=10, alpha=0.05):
             interval = f"[{edges[i]:.3f}; {edges[i+1]:.3f})"
 
         print(
-            f"{interval:>10} "
+            f"{interval:>20} "
             f"{observed[i]:12d} "
             f"{expected[i]:12.2f}"
         )
 
-    # lambda задано заздалегідь, тому df = bins - 1
+    # df = bins - 1 - (кількість оцінених параметрів)
     return chi_square_test(
-        observed, expected, alpha, df=bins - 1
+        observed, expected, alpha, df=bins - 1 - n_estimated
     )
 
 
@@ -167,6 +166,16 @@ def run_exponential_task(n=10_000):
 
         test_exponential_distribution(x, lam)
 
+        # Формування гіпотези за даними: для експоненційного закону
+        # mu = sigma = 1/lambda, тому lambda оцінюється як 1/mean (1.26)
+        lam_hat = 1 / mean
+        print(
+            f"\nГіпотеза за даними: σ/μ = {np.sqrt(variance) / mean:.3f} "
+            f"(для експоненційного ≈ 1), λ̂ = 1/μ = {lam_hat:.4f}"
+        )
+        print("Перевірка з оціненим λ̂ (df зменшується на 1):")
+        test_exponential_distribution(x, lam_hat, n_estimated=1)
+
 
 # ============================================================
 # СПОСІБ 2. РЕКУРЕНТНИЙ ГЕНЕРАТОР
@@ -191,7 +200,7 @@ def generate_congruential(n, a, c, z0=1):
     return np.array(numbers)
 
 
-def test_uniform_distribution(x, bins=10, alpha=0.05):
+def test_uniform_distribution(x, bins=20, alpha=0.05):
     """
     Перевіряє гіпотезу про рівномірний розподіл
     на інтервалі (0; 1).
@@ -213,8 +222,8 @@ def test_uniform_distribution(x, bins=10, alpha=0.05):
 
     for i in range(bins):
         print(
-            f"[{edges[i]:.1f}; {edges[i+1]:.1f})"
-            f"{observed[i]:12d}"
+            f"[{edges[i]:.2f}; {edges[i+1]:.2f})".rjust(18)
+            + f"{observed[i]:12d}"
             f"{expected[i]:12.2f}"
         )
 
@@ -233,8 +242,12 @@ def run_congruential_task(n=10_000):
     # a = 5^13, c = 2^31
     parameter_sets = [
         (5**13, 2**31),
+        (5**15, 2**31),
         (16_807, 2**31 - 1),
-        (1_103_515_245, 2**31)
+        (1_103_515_245, 2**31),
+        # «погані» параметри для порівняння:
+        (5**13, 10**9),     # c не є степенем двійки
+        (13, 2**10),        # короткий період
     ]
 
     for a, c in parameter_sets:
@@ -253,6 +266,7 @@ def run_congruential_task(n=10_000):
         print(f"Теоретичне середнє: {0.5:.6f}")
         print(f"Вибіркова дисперсія: {variance:.6f}")
         print(f"Теоретична дисперсія: {1 / 12:.6f}")
+        print(f"Кількість різних значень: {len(np.unique(x))}")
 
         plot_histogram(
             x,

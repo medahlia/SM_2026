@@ -1,294 +1,156 @@
-"""КП №1, завдання 2: часова затримка сортування колекції 10^6 об'єктів.
-Запуск:  python task2_fixed.py            (вимірювання 150 разів)
-         python task2_fixed.py 300        (вимірювання 300 разів)
-         python task2_fixed.py --load sort_times.csv   (готові дані)"""
+"""КП №1, завдання 2: часова затримка сортування колекції 1 000 000 об'єктів.
+
+Запуск:  python task2_simple.py                    (вимірювання + аналіз)
+         python task2_simple.py sort_times.csv     (аналіз збережених вимірювань)
+"""
 import sys, time, gc
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 
+N_ITEMS = 1_000_000     # розмір колекції
+REPEATS = 200           # скільки разів вимірюємо
+WARMUP = 5              # прогрівальні запуски (не записуються)
+DISCARD = 40            # перші записані запуски відкидаємо: час спочатку «виходить на режим»
 ALPHA = 0.05
 
 
-# ============================================================
-# 1. ВИМІРЮВАННЯ: 10^6 ОБ'ЄКТІВ, нові випадкові дані в кожному запуску
-# ============================================================
 class Item:
     __slots__ = ("v",)
     def __init__(self, v):
         self.v = v
 
 
-def measure_sorting_times(n=1_000_000, repetitions=150, seed=2026, warmup=40):
-    rng = np.random.default_rng(seed)
-
-    def build():
-        return [Item(v) for v in rng.integers(0, 10**9, n).tolist()]
-
-    for _ in range(warmup):                # прогрів (пам'ять, кеші, частота CPU) — не рахується
-        w = build(); w.sort(key=lambda o: o.v); del w
+# 1. ВИМІРЮВАННЯ ------------------------------------------------------------
+def measure_sorting_times(repeats=REPEATS, warmup=WARMUP):
+    """Сортує нову випадкову колекцію з 10^6 об'єктів; вимірюється лише сортування."""
+    rng = np.random.default_rng(2026)
+    build = lambda: [Item(v) for v in rng.integers(0, 10**9, N_ITEMS).tolist()]
+    for _ in range(warmup):
+        d = build(); d.sort(key=lambda o: o.v)
     times = []
-    for i in range(repetitions):
+    for i in range(repeats):
         data = build()
-        gc.collect()                       # збирання сміття не потрапляє у вимірювання
+        gc.collect()
         t0 = time.perf_counter()
         data.sort(key=lambda o: o.v)
         times.append(time.perf_counter() - t0)
-        del data
-        if (i + 1) % 10 == 0:
-            print(f"  виконано {i + 1}/{repetitions}", flush=True)
-    return np.array(times)
+        if (i + 1) % 20 == 0:
+            print(f"  виконано {i + 1}/{repeats}", flush=True)
+    times = np.array(times)
+    np.savetxt("sort_times.csv", times, header="time_s", comments="")   # збереження
+    return times
 
 
-# ============================================================
-# 2. СТАТИСТИКА І ГІСТОГРАМА
-# ============================================================
-def print_statistics(x, title):
-    print(f"\n{title}\n" + "-" * 45)
-    print(f"n = {len(x)}, min = {x.min():.6f}, max = {x.max():.6f}")
-    print(f"середнє = {x.mean():.6f}, медіана = {np.median(x):.6f}")
-    print(f"σ = {x.std(ddof=1):.6f}, дисперсія = {x.var(ddof=1):.3e}")
-    print(f"асиметрія = {stats.skew(x):.3f}, ексцес = {stats.kurtosis(x):.3f}")
+# 2. СЕРЕДНЄ І ДИСПЕРСІЯ ----------------------------------------------------
+def calculate_statistics(x, title):
+    mean, var = x.mean(), x.var(ddof=1)
+    print(f"{title}: n = {len(x)}, середнє = {mean:.6f} с, дисперсія = {var:.3e}, "
+          f"σ = {np.sqrt(var):.6f} с, min = {x.min():.6f}, max = {x.max():.6f}")
+    return mean, var
 
 
-def plot_histogram(x, title, bins=20):
-    plt.figure(figsize=(9, 5))
-    plt.hist(x, bins=bins, edgecolor="black", alpha=.75)
-    plt.title(title); plt.xlabel("Час сортування, с"); plt.ylabel("Кількість вимірювань")
+# 3. ГІСТОГРАМА ------------------------------------------------------------
+def plot_histogram(x, title="Гістограма часу сортування"):
+    plt.figure(figsize=(8, 4.5))
+    plt.hist(x, bins=20, edgecolor="black", alpha=.75)
+    plt.title(title); plt.xlabel("Час, с"); plt.ylabel("Кількість вимірювань")
     plt.grid(axis="y", alpha=.3); plt.tight_layout(); plt.show()
 
 
-# ============================================================
-# 3. КРИТЕРІЇ ЗГОДИ: χ² (n >= 100) і λ-Колмогорова-Смірнова (n < 100)
-# ============================================================
-def chi2_test(x, dist, params, n_params, k=None):
-    """χ² з РІВНОЙМОВІРНИМИ інтервалами під гіпотезою (межі — квантили закону).
-    Очікувана частота n/k в кожному інтервалі, крайні інтервали — до ∓∞,
-    тому викиди не розтягують гістограму. k = min(20, n//5) => n/k >= 5."""
-    n = len(x)
-    k = k or min(20, n // 5)
+# 4. ІДЕНТИФІКАЦІЯ ЗАКОНУ (χ²) ---------------------------------------------
+def chi_square_test(x, dist, params, n_params):
+    """χ² з рівноймовірними інтервалами: межі — квантили закону, очікувана
+    частота n/k в кожному; df = k - 1 - кількість оцінених параметрів."""
+    n = len(x); k = min(20, n // 5)
     df = k - 1 - n_params
-    if df < 1:
-        return np.nan, np.nan, df, np.nan
-    with np.errstate(all="ignore"):
-        inner = dist.ppf(np.arange(1, k) / k, *params)
-    if not np.all(np.isfinite(inner)) or np.any(np.diff(inner) <= 0):
-        return np.nan, np.nan, df, np.nan
-    obs, _ = np.histogram(x, bins=np.concatenate(([-np.inf], inner, [np.inf])))
-    exp = n / k
-    stat = float(np.sum((obs - exp) ** 2 / exp))
-    return stat, float(stats.chi2.ppf(1 - ALPHA, df)), df, float(stats.chi2.sf(stat, df))
+    edges = np.concatenate(([-np.inf], dist.ppf(np.arange(1, k) / k, *params), [np.inf]))
+    obs, _ = np.histogram(x, bins=edges)
+    stat = np.sum((obs - n / k) ** 2 / (n / k))
+    return stat, stats.chi2.ppf(1 - ALPHA, df), df
 
 
-def lambda_test(x, cdf):
-    """λ = sqrt(n)·max|w_i - w_i^T|, λ_кр = 1,36 (α = 0,05) — для n < 100."""
-    xs = np.sort(x); n = len(xs)
-    F = cdf(xs)
-    d = max(np.max(np.arange(1, n + 1) / n - F), np.max(F - np.arange(0, n) / n))
-    lam = np.sqrt(n) * d
-    return float(lam), 1.36
-
-
-# ============================================================
-# 4. ІДЕНТИФІКАЦІЯ ЗАКОНУ (параметри — МНП, у т.ч. зі зсувом)
-# ============================================================
-def fit_candidates(x):
-    m, s, lo = x.mean(), x.std(ddof=1), x.min()
-    g = max(stats.skew(x), 0.3)
-    a0 = 4 / g**2; sc0 = s / np.sqrt(a0); loc0 = m - a0 * sc0       # початкові значення за моментами
-    out = {}
-    def add(name, dist, params, k):
-        out[name] = (dist, params, k)
-    add("Нормальний", stats.norm, stats.norm.fit(x), 2)
-    add("Рівномірний", stats.uniform, stats.uniform.fit(x), 2)
-    add("Експоненційний зі зсувом", stats.expon, stats.expon.fit(x), 2)
-    add("Логнормальний (2)", stats.lognorm, stats.lognorm.fit(x, floc=0), 2)
-    add("Гамма (2)", stats.gamma, stats.gamma.fit(x, floc=0), 2)
-    add("Вейбулла (2)", stats.weibull_min, stats.weibull_min.fit(x, floc=0), 2)
-    try: add("Логнормальний зі зсувом (3)", stats.lognorm, stats.lognorm.fit(x, 0.5, loc=lo - s, scale=s), 3)
-    except Exception: pass
-    try: add("Гамма зі зсувом (3)", stats.gamma, stats.gamma.fit(x, a0, loc=loc0, scale=sc0), 3)
-    except Exception: pass
-    try: add("Вейбулла зі зсувом (3)", stats.weibull_min, stats.weibull_min.fit(x, 1.5, loc=lo - 0.1 * s, scale=1.5 * s), 3)
-    except Exception: pass
-    return out
-
-
-def identify_distribution(x, label=""):
-    n = len(x)
-    crit_name = "χ² (рівноймовірні інтервали)" if n >= 100 else "λ-критерій (n<100)"
-    print(f"\nІдентифікація{label}: {crit_name}, α = {ALPHA}, n = {n}")
-    print(f"{'Розподіл':<30}{'AIC':>11}{'статистика':>12}{'критичне':>10}{'df':>4}{'p':>8}  результат")
+def identify_distribution(x):
+    """Підбирає параметри (метод максимальної правдоподібності) і перевіряє кожен закон за χ².
+    Серед тих, що пройшли перевірку, обирає найменший AIC."""
+    m, s = x.mean(), x.std(ddof=1)
+    candidates = [   # (назва, закон, параметри, кількість параметрів)
+        ("Нормальний", stats.norm, stats.norm.fit(x), 2),
+        ("Експоненційний зі зсувом", stats.expon, stats.expon.fit(x), 2),
+        ("Логнормальний зі зсувом", stats.lognorm, stats.lognorm.fit(x, 0.5, loc=x.min() - s, scale=s), 3),
+        ("Гамма зі зсувом", stats.gamma, stats.gamma.fit(x, 4, loc=x.min() - s, scale=s / 2), 3),
+        ("Вейбулла зі зсувом", stats.weibull_min, stats.weibull_min.fit(x, 1.5, loc=x.min() - 0.1 * s, scale=1.5 * s), 3),
+    ]
+    print(f"\n{'Розподіл':<27}{'AIC':>10}{'χ²':>9}{'χ²_кр':>8}{'df':>4}  результат")
     rows = []
-    for name, (dist, params, k) in fit_candidates(x).items():
+    for name, dist, params, k in candidates:
         aic = 2 * k - 2 * np.sum(dist.logpdf(x, *params))
-        if n >= 100:
-            st, cr, df, p = chi2_test(x, dist, params, k)
-        else:
-            cdf = lambda t, d=dist, q=params: d.cdf(t, *q)
-            st, cr = lambda_test(x, cdf); df, p = 0, np.nan
-        ok = bool(np.isfinite(st) and st < cr)
-        rows.append(dict(name=name, dist=dist, params=params, k=k, aic=aic, stat=st, crit=cr, p=p, ok=ok))
-        print(f"{name:<30}{aic:>11.2f}{st:>12.3f}{cr:>10.3f}{df:>4}{p:>8.4f}  {'приймається' if ok else 'відхиляється'}")
-    accepted = [r for r in rows if r["ok"]]
-    best = min(accepted, key=lambda r: r["aic"]) if accepted else None
-    valid = [r for r in rows if np.isfinite(r["stat"])]
-    nearest = min(valid, key=lambda r: r["stat"] / r["crit"]) if valid else None
-    if best:
-        print(f"Обрано: {best['name']} (серед прийнятих — найменший AIC); параметри: {np.round(best['params'], 6)}")
+        stat, crit, df = chi_square_test(x, dist, params, k)
+        ok = stat < crit
+        rows.append((name, dist, params, aic, stat, crit, ok))
+        print(f"{name:<27}{aic:>10.1f}{stat:>9.2f}{crit:>8.2f}{df:>4}  {'приймається' if ok else 'відхиляється'}")
+    accepted = [r for r in rows if r[6]]
+    if accepted:
+        best = min(accepted, key=lambda r: r[3])
+        print(f"\nОбрано: {best[0]} (серед прийнятих — найменший AIC)")
     else:
-        print("Жоден закон не пройшов критерій згоди.")
-    return best, nearest
+        best = min(rows, key=lambda r: r[4] / r[5])
+        print(f"\nУВАГА: жоден закон не пройшов χ². Береться найближчий: {best[0]} — імітація буде наближеною.")
+    print("Параметри (форма, зсув, масштаб):", np.round(best[2], 6))
+    return best[0], best[1], best[2]
 
 
-def find_burn_in(x):
-    """Перехідний режим (прогрів): час спочатку зростає до сталого рівня.
-    Стаціонарний рівень m і робастний розкид s оцінюються за другою половиною даних;
-    відкидаються всі запуски до останнього, що лежить нижче m - 3s (у перших 40 %)."""
-    n = len(x); h = x[n // 2:]
-    m = np.median(h); s = 1.4826 * np.median(np.abs(h - m))
-    low = np.where(x[:int(0.4 * n)] < m - 3 * s)[0]
-    return int(low[-1] + 1) if len(low) else 0
+# 5. ГЕНЕРАТОР ЗАТРИМОК ----------------------------------------------------
+def generate_delays(dist, params, count=10_000, seed=123):
+    """Метод оберненої функції: r = F^(-1)(ζ), ζ — рівномірне на (0;1)."""
+    zeta = np.clip(np.random.default_rng(seed).random(count), 1e-12, 1 - 1e-12)
+    return dist.ppf(zeta, *params)
 
 
-def diagnostics(x):
-    """Чи не дрейфують виміри в часі і чи є викиди (межа Тьюкі Q3 + 3·IQR)."""
-    rho, p = stats.spearmanr(np.arange(len(x)), x)
-    q1, q3 = np.percentile(x, [25, 75]); thr = q3 + 3 * (q3 - q1)
-    n_out = int(np.sum(x > thr))
-    print(f"\nДіагностика: кореляція Спірмена (номер запуску, час) = {rho:.3f} (p = {p:.3f}); "
-          f"викидів вище {thr:.5f} с: {n_out} ({100 * n_out / len(x):.1f} %)")
-    plt.figure(figsize=(9, 3.5)); plt.plot(x, ".-", lw=.5, ms=3); plt.axhline(thr, color="r", ls="--")
-    plt.xlabel("номер запуску"); plt.ylabel("час, с"); plt.title("Час сортування за номером запуску")
-    plt.grid(alpha=.3); plt.tight_layout(); plt.show()
-    return thr
-
-
-# ============================================================
-# 5. ГЕНЕРАТОР ЗАТРИМОК: метод оберненої функції  r = F^{-1}(ζ)
-# ============================================================
-def generate_core(model, count, seed=123):
-    rng = np.random.default_rng(seed)
-    zeta = np.clip(rng.random(count), 1e-12, 1 - 1e-12)         # ζ ~ U(0;1)
-    return model["dist"].ppf(zeta, *model["params"])            # r = F^{-1}(ζ)
-
-
-def generate_table(sample, count, seed=123):
-    """Табличний метод (1.2.4): F(x) задається кусково-лінійно парами (x_i, a_i = i/(n-1)),
-    r = x_{i-1} + (x_i - x_{i-1})/(a_i - a_{i-1}) · (ζ - a_{i-1})."""
-    xs = np.sort(sample); a = np.arange(len(xs)) / (len(xs) - 1)
-    return np.interp(np.random.default_rng(seed).random(count), a, xs)
-
-
-def generate_delays(model, count=10_000, outliers=None, p_out=0.0, seed=123):
-    """Основна частина — за обраним законом; з ймовірністю p_out — викид, що
-    вибирається з емпіричного розподілу викидів (табличний метод)."""
-    r = generate_core(model, count, seed)
-    if outliers is not None and len(outliers) and p_out > 0:
-        rng = np.random.default_rng(seed + 1)
-        mask = rng.random(count) < p_out
-        srt = np.sort(outliers)
-        r[mask] = srt[(rng.random(mask.sum()) * len(srt)).astype(int)]
-    return r
-
-
-# ============================================================
-# 6. ТОЧНІСТЬ ВІДТВОРЕННЯ
-# ============================================================
-def evaluate_accuracy(real, sim, model, sim_core, repeats=500, seed=5, gen=None):
-    qs = [5, 25, 50, 75, 95, 99]
-    names = ["середнє", "σ", "асиметрія", "min", "max"] + [f"P{q}" for q in qs]
-    f = lambda a: [a.mean(), a.std(ddof=1), stats.skew(a), a.min(), a.max()] + list(np.percentile(a, qs))
-    r, s = f(real), f(sim)
-    print(f"\n{'показник':<10}{'реальні':>11}{'імітація':>11}{'відн. похибка, %':>18}")
-    for nm, a, b in zip(names, r, s):
-        print(f"{nm:<10}{a:>11.5f}{b:>11.5f}{100 * (b - a) / a:>18.2f}")
-
-    if sim_core is not None:
-        st, cr, df, p = chi2_test(sim_core, model["dist"], model["params"], 0)
-        print(f"\nχ² (основна частина імітації) vs обраний закон: {st:.3f} (критичне {cr:.3f}, df={df})")
+# 6. ПОРІВНЯННЯ РЕАЛЬНИХ І ЗГЕНЕРОВАНИХ ДАНИХ ------------------------------
+def compare_times(real, sim):
+    print("\nПОРІВНЯННЯ")
+    print(f"{'':<14}{'реальні':>11}{'згенеровані':>13}{'похибка, %':>12}")
+    pairs = [("середнє", real.mean(), sim.mean()), ("σ", real.std(ddof=1), sim.std(ddof=1)),
+             ("медіана", np.median(real), np.median(sim)),
+             ("P95", np.percentile(real, 95), np.percentile(sim, 95))]
+    for name, a, b in pairs:
+        print(f"{name:<14}{a:>11.6f}{b:>13.6f}{100 * (b - a) / a:>12.2f}")
     ks = stats.ks_2samp(real, sim)
-    print(f"KS (реальні vs імітація): D = {ks.statistic:.4f}, p = {ks.pvalue:.4f}")
-    rng = np.random.default_rng(seed)
-    ps = [stats.ks_2samp(real, gen(len(real), int(rng.integers(1 << 30)))).pvalue
-          for _ in range(repeats)]
-    print(f"Вибірки обсягом n={len(real)}, {repeats} повторів: p>0,05 у {100 * np.mean(np.array(ps) > ALPHA):.1f} % випадків")
-
-    mean_err = abs(s[0] - r[0]) / r[0] * 100
-    std_err = abs(s[1] - r[1]) / r[1] * 100
-    p50_err = abs(s[7] - r[7]) / r[7] * 100
-    p95_err = abs(s[9] - r[9]) / r[9] * 100
-    heavy = stats.kurtosis(real) > 10
-    # при важкому хвості σ визначається 1-3 викидами, тому критерій — середнє, P50, P95 і KS
-    good = mean_err < 1 and p50_err < 1 and p95_err < 2 and ks.pvalue > ALPHA and (heavy or std_err < 5)
-    print("\nВИСНОВОК")
-    print("-" * 45)
-    print(f"Закон: {model['name']}; похибки: середнє {mean_err:.2f} %, P50 {p50_err:.2f} %, P95 {p95_err:.2f} %, "
-          f"σ {std_err:.2f} %, KS p = {ks.pvalue:.3f}.")
-    if heavy:
-        print("Хвіст важкий (ексцес > 10): σ залежить від кількох викидів і є нестійкою оцінкою, "
-              "тому точність оцінюється за середнім, медіаною, P95 та KS.")
-    print("Імітація відтворює затримку задовільно." if good else
-          "Точність недостатня: потрібно уточнити модель (див. таблицю похибок).")
-
-    plt.figure(figsize=(9, 5))
+    print(f"KS-тест двох вибірок: D = {ks.statistic:.4f}, p = {ks.pvalue:.4f}")
+    mean_err = abs(pairs[0][2] - pairs[0][1]) / pairs[0][1] * 100
+    good = mean_err < 1 and ks.pvalue > ALPHA
+    print("ВИСНОВОК: " + ("генератор відтворює затримку задовільно (середнє < 1 %, KS p > 0,05)."
+                          if good else "точність недостатня — потрібно уточнити модель."))
+    plt.figure(figsize=(8, 4.5))
     plt.hist(real, bins=20, density=True, alpha=.6, edgecolor="black", label="виміряні")
     plt.hist(sim, bins=60, density=True, histtype="step", color="r", label="згенеровані")
     plt.title("Реальні та згенеровані затримки"); plt.xlabel("Час, с"); plt.ylabel("Щільність")
     plt.legend(); plt.grid(alpha=.3); plt.tight_layout(); plt.show()
 
 
-# ============================================================
-# 7. ГОЛОВНА ПРОГРАМА
-# ============================================================
+# ГОЛОВНА ПРОГРАМА ----------------------------------------------------------
 def main():
-    if len(sys.argv) > 2 and sys.argv[1] == "--load":
-        real = np.loadtxt(sys.argv[2], skiprows=1)
+    if len(sys.argv) > 1:
+        times = np.loadtxt(sys.argv[1], skiprows=1)
     else:
-        reps = int(sys.argv[1]) if len(sys.argv) > 1 else 150
-        print(f"Вимірювання часу сортування 1 000 000 об'єктів, {reps} запусків")
-        real = measure_sorting_times(repetitions=reps)
-        np.savetxt("sort_times.csv", real, header="time_s", comments="")
-    if len(real) < 100:
-        print("УВАГА: n < 100 — χ² незастосовний, використовується λ-критерій; для надійності зробіть ≥ 100 вимірювань.")
-    print_statistics(real, "РЕЗУЛЬТАТИ ВИМІРЮВАНЬ (усі запуски)")
-    diagnostics(real)
-    burn = find_burn_in(real)
-    if burn:
-        print(f"\nПерехідний режим: перші {burn} запусків відкинуто (час зростає до сталого рівня — "
-              f"прогрів системи); далі аналізується стаціонарна частина.")
-        real = real[burn:]
-        print_statistics(real, "СТАЦІОНАРНА ЧАСТИНА")
-    cv = real.std(ddof=1) / real.mean()
-    print(f"\nКоефіцієнт варіації CV = {100 * cv:.2f} %")
-    plot_histogram(real, "Гістограма часу сортування 10^6 об'єктів (стаціонарна частина)")
-    thr = diagnostics(real) if burn else np.percentile(real, 75) + 3 * (np.percentile(real, 75) - np.percentile(real, 25))
+        print(f"Вимірювання сортування {N_ITEMS:,} об'єктів, {REPEATS} запусків")
+        times = measure_sorting_times()
 
-    best, nearest = identify_distribution(real, " (усі дані)")
-    outliers, p_out = None, 0.0
-    if best is None:
-        core, outliers = real[real <= thr], real[real > thr]
-        p_out = len(outliers) / len(real)
-        print(f"\nВикиди (> {thr:.5f} с, {len(outliers)} шт.) відокремлюємо: це рідкісні затримки "
-              f"від ОС/GC, їх моделюємо окремо за емпіричним розподілом.")
-        best, nearest = identify_distribution(core, " (без викидів)")
-        if best is None:
-            print(f"\nПараметричний закон не пройшов критерій (найближчий: {nearest['name']}, "
-                  f"χ²={nearest['stat']:.1f} проти {nearest['crit']:.1f}). Розподіл має «тонку» структуру, "
-                  f"яку 2–3 параметри не описують, тому генератор будуємо ТАБЛИЧНИМ методом "
-                  f"за емпіричною функцією розподілу стаціонарної частини.")
-            best = dict(name="Табличний (емпіричний) метод", table=True)
-    else:
-        core = real
+    calculate_statistics(times, "Усі запуски")
+    x = times[DISCARD:]                                   # без перших запусків («вихід на режим»)
+    q1, q3 = np.percentile(x, [25, 75])
+    thr = q3 + 3 * (q3 - q1)                              # межа викидів (Тьюкі)
+    n_out = int(np.sum(x > thr))
+    x = x[x <= thr]
+    print(f"Відкинуто перші {DISCARD} запусків і {n_out} викидів (> {thr:.5f} с, рідкісні затримки ОС).")
+    calculate_statistics(x, "Для аналізу")
+    plot_histogram(x)
 
-    if best.get("table"):
-        gen = lambda cnt, seed=123: generate_table(real, cnt, seed)
-        sim = gen(10_000); sim_core = None
-    else:
-        gen = lambda cnt, seed=123: generate_delays(best, cnt, outliers, p_out, seed)
-        sim = gen(10_000); sim_core = generate_core(best, 10_000)
-    print_statistics(sim, "ЗГЕНЕРОВАНІ ЗАТРИМКИ")
-    evaluate_accuracy(real, sim, best, sim_core, gen=gen)
+    name, dist, params = identify_distribution(x)
+    sim = generate_delays(dist, params)
+    calculate_statistics(sim, "Згенеровані")
+    compare_times(x, sim)
 
 
 if __name__ == "__main__":

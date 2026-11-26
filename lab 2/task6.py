@@ -1,31 +1,17 @@
-"""
-Комп'ютерний практикум 2. Завдання 6.
-
-Модифікація класу PROCESS: вихід у два і більше наступних блоків
-(вибір маршруту з заданими ймовірностями), у тому числі повернення
-у попередні блоки. Клас PROCESS також підтримує кілька пристроїв (завдання 5).
-Наприкінці - верифікація (рядки - змінні, стовпці - прогони).
-"""
-
 import math
 import random
 
 
-# ---------------------------------------------------------------------------
-# Генератори випадкових величин
-# ---------------------------------------------------------------------------
 class FunRand:
     @staticmethod
     def exp(time_mean):
-        """Експоненційний розподіл із середнім time_mean."""
         a = 0.0
-        while a == 0.0:          # log(0) не можна, тому відкидаємо нуль
+        while a == 0.0:          
             a = random.random()
         return -time_mean * math.log(a)
 
     @staticmethod
     def unif(time_min, time_max):
-        """Рівномірний розподіл на [time_min, time_max]."""
         a = 0.0
         while a == 0.0:
             a = random.random()
@@ -33,51 +19,43 @@ class FunRand:
 
     @staticmethod
     def norm(time_mean, time_deviation):
-        """Нормальний розподіл (Гаусса)."""
         return time_mean + time_deviation * random.gauss(0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Базовий елемент моделі
-# ---------------------------------------------------------------------------
 class Element:
-    next_id = 0  # лічильник для унікальних номерів елементів
+    next_id = 0  
 
-    def __init__(self, delay_mean=1.0, name=None, distribution="exp"):
+    def __init__(self, delay_mean = 1.0, name = None, distribution = "exp"):
         self.id = Element.next_id
         Element.next_id += 1
         self.name = name if name else f"element{self.id}"
 
-        self.delay_mean = delay_mean      # середня часова затримка
-        self.delay_dev = 0.0              # відхилення (для norm / unif)
-        self.distribution = distribution  # "exp", "norm", "unif" або "" (детермінована)
+        self.delay_mean = delay_mean      
+        self.delay_dev = 0.0              
+        self.distribution = distribution  
 
-        self.tnext = 0.0          # момент наступної події елемента
-        self.tcurr = 0.0          # поточний модельний час
-        self.state = 0            # 0 - вільний, 1 - зайнятий
-        self.quantity = 0         # кількість об'єктів, що вийшли з елемента
-        self.next_element = None  # наступний елемент у маршруті
+        self.tnext = 0.0    
+        self.tcurr = 0.0          
+        self.state = 0            
+        self.quantity = 0  
+        self.next_element = None  
 
     def get_delay(self):
-        """Генерує часову затримку за заданим законом розподілу."""
         if self.distribution == "exp":
             return FunRand.exp(self.delay_mean)
         if self.distribution == "norm":
             return FunRand.norm(self.delay_mean, self.delay_dev)
         if self.distribution == "unif":
             return FunRand.unif(self.delay_mean, self.delay_dev)
-        return self.delay_mean  # детермінована затримка
+        return self.delay_mean  
 
     def in_act(self):
-        """Вхід об'єкта в елемент (перевизначається в нащадках)."""
         pass
 
     def out_act(self):
-        """Вихід об'єкта з елемента."""
         self.quantity += 1
 
     def do_statistics(self, delta):
-        """Накопичення статистики за інтервал delta (перевизначається)."""
         pass
 
     def print_info(self):
@@ -88,51 +66,39 @@ class Element:
         print(f"{self.name}: quantity = {self.quantity}")
 
 
-# ---------------------------------------------------------------------------
-# CREATE - генератор вимог
-# ---------------------------------------------------------------------------
 class Create(Element):
-    def __init__(self, delay_mean, name="CREATOR", distribution="exp"):
+    def __init__(self, delay_mean, name = "CREATOR", distribution = "exp"):
         super().__init__(delay_mean, name, distribution)
-        self.tnext = 0.0  # імітація починається з події Create
+        self.tnext = 0.0  
 
     def out_act(self):
-        super().out_act()                              # +1 створена вимога
-        self.tnext = self.tcurr + self.get_delay()     # момент наступного надходження
-        self.next_element.in_act()                     # передаємо вимогу далі
+        super().out_act()                            
+        self.tnext = self.tcurr + self.get_delay()     
+        self.next_element.in_act()                  
 
 
-# ---------------------------------------------------------------------------
-# PROCESS: кілька ідентичних пристроїв (завдання 5) + вихід у кілька блоків (завдання 6)
-# ---------------------------------------------------------------------------
+#кілька ідентичних пристроїв + вихід у кілька блоків
 class Process(Element):
-    def __init__(self, delay_mean, name="PROCESSOR", distribution="exp",
-                 max_queue=math.inf, channels=1):
+    def __init__(self, delay_mean, name = "PROCESSOR", distribution = "exp", max_queue = math.inf, channels = 1):
         super().__init__(delay_mean, name, distribution)
         self.channels = channels
-        # Для кожного каналу зберігаємо момент виходу вимоги з нього.
-        # math.inf означає, що канал вільний.
         self.channel_tnext = [math.inf] * channels
-        self.tnext = math.inf      # найближчий вихід серед усіх каналів
-        self.state = 0             # тепер state = кількість зайнятих каналів
+        self.tnext = math.inf     
+        self.state = 0   
         self.queue = 0
         self.max_queue = max_queue
         self.failure = 0
         self.arrived = 0
         self.mean_queue = 0.0
-        self.mean_load = 0.0       # інтеграл кількості зайнятих каналів
-        # ЗАВДАННЯ 6: список маршрутів [(наступний_елемент, ймовірність), ...].
-        # None замість елемента означає вихід з моделі (DISPOSE).
-        # Якщо список порожній - використовується звичайний next_element.
+        self.mean_load = 0.0     
+
         self.routes = []
-        self.route_count = {}      # скільки вимог пішло кожним маршрутом
+        self.route_count = {}     
 
     def _update_tnext(self):
-        """Момент наступної події елемента = найменший момент виходу з каналів."""
         self.tnext = min(self.channel_tnext)
 
     def choose_next(self):
-        """ЗАВДАННЯ 6: випадковий вибір наступного блоку за заданими ймовірностями."""
         if not self.routes:
             return self.next_element
         r = random.random()
@@ -141,37 +107,35 @@ class Process(Element):
             acc += prob
             if r < acc:
                 return element
-        return self.routes[-1][0]  # захист від похибки округлення суми ймовірностей
+        return self.routes[-1][0]  
 
     def in_act(self):
         self.arrived += 1
-        if math.inf in self.channel_tnext:                 # є вільний канал
+        if math.inf in self.channel_tnext:              
             i = self.channel_tnext.index(math.inf)
             self.channel_tnext[i] = self.tcurr + self.get_delay()
             self.state += 1
-        elif self.queue < self.max_queue:                  # усі канали зайняті -> у чергу
+        elif self.queue < self.max_queue:             
             self.queue += 1
-        else:                                              # черга заповнена -> відмова
+        else:                                        
             self.failure += 1
         self._update_tnext()
 
     def out_act(self):
-        # Обслуговування може завершитися одночасно в кількох каналах,
-        # тому перевіряємо кожен канал
         for i in range(self.channels):
             if self.channel_tnext[i] == self.tcurr:
-                super().out_act()                          # +1 обслужена вимога
-                self.channel_tnext[i] = math.inf           # канал звільнився
+                super().out_act()                      
+                self.channel_tnext[i] = math.inf         
                 self.state -= 1
-                if self.queue > 0:                         # одразу беремо вимогу з черги
+                if self.queue > 0:                       
                     self.queue -= 1
                     self.channel_tnext[i] = self.tcurr + self.get_delay()
                     self.state += 1
-                nxt = self.choose_next()                   # ЗАВДАННЯ 6: куди йде вимога
+                nxt = self.choose_next()                 
                 key = nxt.name if nxt is not None else "DISPOSE"
                 self.route_count[key] = self.route_count.get(key, 0) + 1
                 if nxt is not None:
-                    nxt.in_act()                           # у тому числі повернення назад
+                    nxt.in_act()                          
         self._update_tnext()
 
     def do_statistics(self, delta):
@@ -184,18 +148,15 @@ class Process(Element):
               f"зайнято каналів = {self.state}/{self.channels}")
 
 
-# ---------------------------------------------------------------------------
-# Модель
-# ---------------------------------------------------------------------------
 class Model:
     def __init__(self, elements):
         self.elements = elements
         self.tnext = 0.0
         self.tcurr = 0.0
 
-    def simulate(self, time, verbose=True):
+    def simulate(self, time, verbose = True):
         while self.tcurr < time:
-            next_el = min(self.elements, key=lambda e: e.tnext)
+            next_el = min(self.elements, key = lambda e: e.tnext)
             self.tnext = next_el.tnext
             if verbose:
                 print(f"\nПодія в {next_el.name}, час = {self.tnext:.4f}")
@@ -235,23 +196,15 @@ class Model:
             print(f"{name:42s} {value:.4f}" if isinstance(value, float) else f"{name:42s} {value}")
 
 
-# ---------------------------------------------------------------------------
-# Модель з розгалуженням і поверненням:
-#
-#   CREATE -> PROCESS1 --(p)----> PROCESS2 -> DISPOSE
-#                ^      \--(1-p)-> PROCESS3 --(1-r)--> DISPOSE
-#                |                    |
-#                +-------(r)----------+   (повернення у попередній блок)
-# ---------------------------------------------------------------------------
 def build_model(params):
     c = Create(params["d_create"])
     p1 = Process(params["d1"], "PROCESS1", max_queue=params["q1"], channels=params["n1"])
     p2 = Process(params["d2"], "PROCESS2", max_queue=params["q2"], channels=params["n2"])
     p3 = Process(params["d3"], "PROCESS3", max_queue=params["q3"], channels=params["n3"])
     c.next_element = p1
-    p1.routes = [(p2, params["p"]), (p3, 1 - params["p"])]       # розгалуження
-    p2.routes = [(None, 1.0)]                                     # DISPOSE
-    p3.routes = [(p1, params["r"]), (None, 1 - params["r"])]     # повернення в СМО1
+    p1.routes = [(p2, params["p"]), (p3, 1 - params["p"])]     
+    p2.routes = [(None, 1.0)]                                 
+    p3.routes = [(p1, params["r"]), (None, 1 - params["r"])]    
     return Model([c, p1, p2, p3])
 
 
@@ -270,23 +223,21 @@ INPUT_NAMES = {
     "r": "Ймовірність повернення СМО3 -> СМО1",
 }
 
-# ---------------------------------------------------------------------------
-# Таблиця верифікації (транспонована: рядки - змінні, стовпці - прогони)
-# ---------------------------------------------------------------------------
+
 def fmt(v):
     if isinstance(v, float):
         return "∞" if v == math.inf else f"{v:.3f}"
     return str(v)
 
 
-def verification(base, changes, time=10000.0, csv_name=None):
+def verification(base, changes, time = 10000.0, csv_name = None):
     runs = []
     for change in changes:
         params = dict(base)
-        params.update(change)          # змінюємо 1-2 параметри відносно базових
-        random.seed(42)                # однаковий потік випадкових чисел для порівняння
+        params.update(change)         
+        random.seed(42)               
         model = build_model(params)
-        model.simulate(time, verbose=False)
+        model.simulate(time, verbose = False)
         runs.append((params, change, model.results()))
 
     out_names = list(runs[0][2].keys())
@@ -294,7 +245,7 @@ def verification(base, changes, time=10000.0, csv_name=None):
     header = f"{'Змінна':{width}s}" + "".join(f"{'Прогін ' + str(i + 1):>11s}" for i in range(len(runs)))
     print(header)
     print("-" * len(header))
-    print("ВХІДНІ ЗМІННІ (* - змінене значення)")
+    print("ВХІДНІ ЗМІННІ")
     for key, title in INPUT_NAMES.items():
         cells = ""
         for params, change, _ in runs:
@@ -305,7 +256,6 @@ def verification(base, changes, time=10000.0, csv_name=None):
     for name in out_names:
         print(f"{name:{width}s}" + "".join(f"{fmt(r[2][name]):>11s}" for r in runs))
 
-    # Збереження таблиці у CSV (зручно вставити у звіт через Excel)
     if csv_name:
         import csv
         with open(csv_name, "w", newline="", encoding="utf-8-sig") as f:
@@ -323,24 +273,16 @@ if __name__ == "__main__":
             "n2": 1, "d2": 1.0, "q2": 5, "n3": 1, "d3": 1.0, "q3": 5,
             "p": 0.6, "r": 0.2}
 
-    print("=== Один прогін, час моделювання 1000 ===")
+    print("--1 прогін, 1000--")
     random.seed(1)
     model = build_model(base)
-    model.simulate(1000.0, verbose=False)
+    model.simulate(1000.0, verbose = False)
     model.print_result()
     for e in model.elements[1:]:
         print(f"Маршрути з {e.name}: {e.route_count}")
 
-    # Верифікація
     print("\n\n=== Верифікація (час моделювання 10000) ===\n")
-    changes = [
-        {},                     # 1 базовий прогін
-        {"p": 0.0},             # 2 усі вимоги йдуть у СМО3 -> СМО2 простоює
-        {"p": 1.0},             # 3 усі вимоги йдуть у СМО2 -> СМО3 простоює, повернень немає
-        {"r": 0.0},             # 4 без повернень -> менше навантаження на СМО1 і СМО3
-        {"r": 0.6},             # 5 багато повернень -> росте навантаження і черги СМО1, СМО3
-        {"n1": 1},              # 6 СМО1 одноканальна -> вузьке місце на вході
-        {"d_create": 2.0},      # 7 рідше надходження -> менше черг і відмов
-        {"n3": 2, "r": 0.6},    # 8 другий пристрій у СМО3 компенсує повернення
-    ]
+    changes = [ {}, {"p": 0.0}, {"p": 1.0},  {"r": 0.0},  {"r": 0.6},         
+        {"n1": 1}, {"d_create": 2.0},      # 7 рідше надходження -> менше черг і відмов
+        {"n3": 2, "r": 0.6},]
     verification(base, changes, csv_name="verification_task6.csv")

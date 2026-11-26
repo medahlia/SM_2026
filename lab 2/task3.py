@@ -1,30 +1,17 @@
-"""
-Комп'ютерний практикум 2. Завдання 3 і 4.
-
-3. Модель за рисунком 2.1: CREATE -> PROCESS1 -> PROCESS2 -> PROCESS3 -> DISPOSE.
-4. Верифікація моделі: змінюємо вхідні змінні та параметри,
-   результати виводимо в таблицю (рядки - змінні, стовпці - прогони).
-"""
-
 import math
 import random
 
 
-# ---------------------------------------------------------------------------
-# Генератори випадкових величин
-# ---------------------------------------------------------------------------
 class FunRand:
     @staticmethod
     def exp(time_mean):
-        """Експоненційний розподіл із середнім time_mean."""
         a = 0.0
-        while a == 0.0:          # log(0) не можна, тому відкидаємо нуль
+        while a == 0.0:          
             a = random.random()
         return -time_mean * math.log(a)
 
     @staticmethod
     def unif(time_min, time_max):
-        """Рівномірний розподіл на [time_min, time_max]."""
         a = 0.0
         while a == 0.0:
             a = random.random()
@@ -32,51 +19,43 @@ class FunRand:
 
     @staticmethod
     def norm(time_mean, time_deviation):
-        """Нормальний розподіл (Гаусса)."""
         return time_mean + time_deviation * random.gauss(0.0, 1.0)
 
 
-# ---------------------------------------------------------------------------
-# Базовий елемент моделі
-# ---------------------------------------------------------------------------
 class Element:
-    next_id = 0  # лічильник для унікальних номерів елементів
+    next_id = 0  
 
-    def __init__(self, delay_mean=1.0, name=None, distribution="exp"):
+    def __init__(self, delay_mean = 1.0, name = None, distribution = "exp"):
         self.id = Element.next_id
         Element.next_id += 1
         self.name = name if name else f"element{self.id}"
 
-        self.delay_mean = delay_mean      # середня часова затримка
-        self.delay_dev = 0.0              # відхилення (для norm / unif)
-        self.distribution = distribution  # "exp", "norm", "unif" або "" (детермінована)
+        self.delay_mean = delay_mean      
+        self.delay_dev = 0.0           
+        self.distribution = distribution  
 
-        self.tnext = 0.0          # момент наступної події елемента
-        self.tcurr = 0.0          # поточний модельний час
-        self.state = 0            # 0 - вільний, 1 - зайнятий
-        self.quantity = 0         # кількість об'єктів, що вийшли з елемента
-        self.next_element = None  # наступний елемент у маршруті
+        self.tnext = 0.0          
+        self.tcurr = 0.0         
+        self.state = 0            
+        self.quantity = 0         
+        self.next_element = None 
 
     def get_delay(self):
-        """Генерує часову затримку за заданим законом розподілу."""
         if self.distribution == "exp":
             return FunRand.exp(self.delay_mean)
         if self.distribution == "norm":
             return FunRand.norm(self.delay_mean, self.delay_dev)
         if self.distribution == "unif":
             return FunRand.unif(self.delay_mean, self.delay_dev)
-        return self.delay_mean  # детермінована затримка
+        return self.delay_mean  
 
     def in_act(self):
-        """Вхід об'єкта в елемент (перевизначається в нащадках)."""
         pass
 
     def out_act(self):
-        """Вихід об'єкта з елемента."""
         self.quantity += 1
 
     def do_statistics(self, delta):
-        """Накопичення статистики за інтервал delta (перевизначається)."""
         pass
 
     def print_info(self):
@@ -87,33 +66,27 @@ class Element:
         print(f"{self.name}: quantity = {self.quantity}")
 
 
-# ---------------------------------------------------------------------------
-# CREATE - генератор вимог
-# ---------------------------------------------------------------------------
 class Create(Element):
-    def __init__(self, delay_mean, name="CREATOR", distribution="exp"):
+    def __init__(self, delay_mean, name = "CREATOR", distribution = "exp"):
         super().__init__(delay_mean, name, distribution)
-        self.tnext = 0.0  # імітація починається з події Create
+        self.tnext = 0.0  
 
     def out_act(self):
-        super().out_act()                              # +1 створена вимога
-        self.tnext = self.tcurr + self.get_delay()     # момент наступного надходження
-        self.next_element.in_act()                     # передаємо вимогу далі
+        super().out_act()                         
+        self.tnext = self.tcurr + self.get_delay()   
+        self.next_element.in_act()                     
 
 
-# ---------------------------------------------------------------------------
-# PROCESS - пристрій обслуговування з чергою
-# ---------------------------------------------------------------------------
 class Process(Element):
-    def __init__(self, delay_mean, name="PROCESSOR", distribution="exp", max_queue=math.inf):
+    def __init__(self, delay_mean, name = "PROCESSOR", distribution = "exp", max_queue = math.inf):
         super().__init__(delay_mean, name, distribution)
         self.tnext = math.inf
         self.queue = 0
         self.max_queue = max_queue
         self.failure = 0
-        self.arrived = 0          # скільки вимог надійшло до елемента
-        self.mean_queue = 0.0     # інтеграл довжини черги
-        self.mean_load = 0.0      # інтеграл зайнятості пристрою
+        self.arrived = 0         
+        self.mean_queue = 0.0   
+        self.mean_load = 0.0     
 
     def in_act(self):
         self.arrived += 1
@@ -133,8 +106,7 @@ class Process(Element):
             self.queue -= 1
             self.state = 1
             self.tnext = self.tcurr + self.get_delay()
-        # НОВЕ для завдання 3: передаємо обслужену вимогу наступному блоку.
-        # Якщо наступного блоку немає - вимога виходить з моделі (DISPOSE).
+        #передаємо обслужену вимогу наступному блоку
         if self.next_element is not None:
             self.next_element.in_act()
 
@@ -147,9 +119,6 @@ class Process(Element):
         print(f"    queue = {self.queue}, failure = {self.failure}")
 
 
-# ---------------------------------------------------------------------------
-# Модель
-# ---------------------------------------------------------------------------
 class Model:
     def __init__(self, elements):
         self.elements = elements
@@ -176,7 +145,6 @@ class Model:
                     e.print_info()
 
     def results(self):
-        """Повертає словник вихідних змінних моделі (для таблиці верифікації)."""
         res = {}
         processes = [e for e in self.elements if isinstance(e, Process)]
         creator = self.elements[0]
@@ -196,9 +164,7 @@ class Model:
             print(f"{name:40s} {value:.4f}" if isinstance(value, float) else f"{name:40s} {value}")
 
 
-# ---------------------------------------------------------------------------
-# Побудова моделі за рисунком 2.1: CREATE -> PROCESS1 -> PROCESS2 -> PROCESS3 -> DISPOSE
-# ---------------------------------------------------------------------------
+#CREATE -> PROCESS1 -> PROCESS2 -> PROCESS3 -> DISPOSE
 def build_model(params):
     c = Create(params["d_create"])
     p1 = Process(params["d1"], "PROCESS1", max_queue=params["q1"])
@@ -207,7 +173,7 @@ def build_model(params):
     c.next_element = p1
     p1.next_element = p2
     p2.next_element = p3
-    p3.next_element = None  # DISPOSE
+    p3.next_element = None
     return Model([c, p1, p2, p3])
 
 
@@ -223,21 +189,17 @@ INPUT_NAMES = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Таблиця верифікації (транспонована: рядки - змінні, стовпці - прогони)
-# ---------------------------------------------------------------------------
 def fmt(v):
     if isinstance(v, float):
         return "∞" if v == math.inf else f"{v:.3f}"
     return str(v)
 
-
-def verification(base, changes, time=10000.0, csv_name=None):
+def verification(base, changes, time = 10000.0, csv_name = None):
     runs = []
     for change in changes:
         params = dict(base)
-        params.update(change)          # змінюємо 1-2 параметри відносно базових
-        random.seed(42)                # однаковий потік випадкових чисел для порівняння
+        params.update(change)          
+        random.seed(42)       
         model = build_model(params)
         model.simulate(time, verbose=False)
         runs.append((params, change, model.results()))
@@ -258,7 +220,6 @@ def verification(base, changes, time=10000.0, csv_name=None):
     for name in out_names:
         print(f"{name:{width}s}" + "".join(f"{fmt(r[2][name]):>12s}" for r in runs))
 
-    # Збереження таблиці у CSV (зручно вставити у звіт через Excel)
     if csv_name:
         import csv
         with open(csv_name, "w", newline="", encoding="utf-8-sig") as f:
@@ -272,24 +233,14 @@ def verification(base, changes, time=10000.0, csv_name=None):
 
 
 if __name__ == "__main__":
-    # ЗАВДАННЯ 3: один прогін моделі
     random.seed(1)
     base = {"d_create": 2.0, "d1": 1.0, "q1": 5, "d2": 1.5, "q2": 5, "d3": 1.0, "q3": 5}
     model = build_model(base)
-    model.simulate(1000.0, verbose=False)
-    print("=== ЗАВДАННЯ 3: мережа з трьох СМО, час моделювання 1000 ===")
+    model.simulate(1000.0, verbose = False)
+    print("--Завдання 3: мережа з трьох СМО, 1000--")
     model.print_result()
 
-    # ЗАВДАННЯ 4: верифікація - змінюємо по одному параметру відносно базового прогону
-    print("\n\n=== ЗАВДАННЯ 4: верифікація моделі (час моделювання 10000) ===\n")
-    changes = [
-        {},                              # 1 базовий прогін
-        {"d_create": 1.0},               # 2 частіше надходження -> більше черги та відмов
-        {"d_create": 5.0},               # 3 рідше надходження -> менше черги та завантаження
-        {"d1": 1.8},                     # 4 повільніша СМО1
-        {"d2": 3.0},                     # 5 СМО2 повільніша за потік -> вузьке місце
-        {"q2": 1},                       # 6 коротка черга СМО2 -> більше відмов у СМО2
-        {"d3": 0.2},                     # 7 швидка СМО3 -> майже без черги
-        {"q1": 0, "q2": 0, "q3": 0},     # 8 без черг -> лише відмови, черги = 0
-    ]
+    print("\n\n--Завдання 4: верифікація моделі (10000)--\n")
+    changes = [ {}, {"d_create": 1.0}, {"d_create": 5.0}, {"d1": 1.8}, {"d2": 3.0},          
+        {"q2": 1}, {"d3": 0.2}, {"q1": 0, "q2": 0, "q3": 0}]
     verification(base, changes, csv_name="verification_task4.csv")

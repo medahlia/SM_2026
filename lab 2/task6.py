@@ -283,6 +283,6 @@ if __name__ == "__main__":
 
     print("\n\n=== Верифікація (час моделювання 10000) ===\n")
     changes = [ {}, {"p": 0.0}, {"p": 1.0},  {"r": 0.0},  {"r": 0.6},         
-        {"n1": 1}, {"d_create": 2.0},      # 7 рідше надходження -> менше черг і відмов
+        {"n1": 1}, {"d_create": 2.0},    
         {"n3": 2, "r": 0.6},]
     verification(base, changes, csv_name="verification_task6.csv")
